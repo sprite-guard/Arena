@@ -1,5 +1,17 @@
 var DEBUG = true;
 
+var story_box = document.getElementById("our_story");
+
+var the_one_who_is_speaking = -1;
+
+function write_to_story(text) {
+  story_box.innerHTML += text;
+}
+
+function clear_story() {
+  story_box.innerHTML = "";
+}
+
 class Component {
   constructor(name,els) {
     this.els = els;
@@ -53,6 +65,11 @@ var all_components = [
                           "greatsword"])
   
 ];
+
+var pronoun_inflection = {
+  possessive: ["his", "her", "xir", "their"],
+  accusative: ["him", "her", "xem", "them"]
+}
 
 var total_warrior_count = 1;
 for(var c of all_components) {
@@ -175,27 +192,43 @@ class Warrior {
       this.s = "s";
       this.was = "was";
     }
+    
     this.name = warriorName(id);
     this.alliances = [];
     this.grievances = [];
     this.id = id;
   }
-  
-  get description() {
-    return `<p>${this.name} is a ${this.build} warrior with ${this.hair_color} ${this.hair_style} hair.<br />
-${this.pronoun} wield${this.s} a ${this.weapon}.</p>`;
+
+  say(text) {
+    if(the_one_who_is_speaking != this.id) {
+      the_one_who_is_speaking = this.id;
+      write_to_story(`<p>${this.name} says:</p>`);
+    }
+
+    write_to_story(text);
   }
   
-  get litany() {
+  get description() {
+
+    return `<p>${this.name} is a ${this.build} warrior with ${this.hair_color} ${this.hair_style} hair.<br />
+${this.pronoun} wield${this.s} a ${this.weapon}.</p>`;
+  
+  }
+  
+  litany(other) {
     var res = `<p>${this.name} says:</p>`;
-    for(var grievance of this.grievances) {
+    for(var grievance of this.grievances[other.id]) {
       res += `<p>${grievance}</p>`;
     }
     return res;
   }
   
-  get grievance_count() {
-    return this.grievances.length;
+  grievance_count(other) {
+    if(this.grievances[other.id]) {
+      return this.grievances[other.id].length;
+    } else {
+      return 0;
+    }
   }
   
   alliance(other) {
@@ -208,27 +241,29 @@ ${this.pronoun} wield${this.s} a ${this.weapon}.</p>`;
     return this.alliances[id];
   }
   
-  add_grievance(other) {
-    var beneficiary = other.current_opponent;
-    this.grievances.push(`you ${Script.insulted()} me to ${Script.favor()} ${beneficiary.name}`);
+  add_grievance(other,beneficiary) {
+    if(!this.grievances[beneficiary]) this.grievances[beneficiary] = [];
+    this.grievances[beneficiary].push(`you ${Script.insulted()} me to ${Script.favor()} ${beneficiary.name}`);
     
     // we don't want this to become spammy
-    if(this.grievance_count > 5) this.grievances.unshift();
+    if(this.grievance_count > 5) {
+      this.grievances.unshift();
+      this.has_more_grievances = true;
+     }
   }
   
-  offend(other) {
-    
-    // dismiss the other being offended
-    var insult = new Insult( this.id + other.id, this.alliances[other.id]);
-    document.write(`<p>${this.name} says, "${insult}"</p>`);
-
+  offend(other_id,benefits_whom) {
+    // make sure the other warrior exists
+    if(!Game.extant_warriors[other_id]) Game.extant_warriors[other_id] = new Warrior(other_id);
+    var other = Game.extant_warriors[other_id];
+    // make sure both alliances exist
     this.alliance(other.id);
     other.alliance(this.id);
     
     this.alliances[other.id] -= 1;
     other.alliances[this.id] -= 1;
     
-    other.add_grievance(new Grievance(this));
+    other.add_grievance(this,benefits_whom);
   }
 
   does_not_hate(other) {
@@ -240,36 +275,50 @@ ${this.pronoun} wield${this.s} a ${this.weapon}.</p>`;
   }
 
   make_peace_offering(other) {
+    // we need to store whether or not a point of contention was found.
+    var contention_was_found = false;
+  
     for(var i = 0; i < total_warrior_count; i++) {
       if(!(i == this.id || i == other.id)) {
         if(this.alliance_by_id(i) < 0 && other.alliance_by_id(i) >= 0) {
           if(DEBUG) console.log("found point of disagreement: "+i);
+          contention_was_found = true;
+
           // this warrior asks the other warrior to forswear allegiance to a friend
           // in order to make a peaceful resolution to this encounter
-          document.write( `<p>${this.name} says:<br />
-"${other.name}! You still look favorably on ${warriorName(i)}.<br />
+          
+          this.say(`"${other.name}! You still look favorably on ${warriorName(i)}.<br />
 Foreswear your allegiance with that one, who has done great evil."</p>` );
 
           // other warrior has to consider the offer, and accept or reject.
           // nb this needs to be defined
           // it should return true if other accepts the offer.
           if(other.consider_offer(this.id,i)) {
+            
             // worsen the relationship as requested, then improve the relationship between these two.
-            document.write( `<p>${other.name} says:<br />
-"It shall be done. ${warriorName(i)} means nothing to me."</p>` );
-            other.insult(i);
+            // then break out of the loop, and give the other a chance to respond.
+            
+            other.say( `"It shall be done. ${warriorName(i)} means nothing to me."</p>` );
+            
+            other.offend(i,this);
             this.alliances[other.id] += 1;
             other.alliances[this.id] += 1;
           } else {
+            
             // they reject the offer, negotiations fall apart, they battle.
-            document.write( `<p>${other.name} says:<br />
-"I will do no such thing for the likes of you!"</p>` );
+            
+            other.say( `"I will do no such thing for the likes of you!"</p>` );
+            
             this.alliances[other.id] -= 1;
             other.alliances[this.id] -= 1;
-            this.battle(other);
+            Game.battle(other,this);
           }
         }
       }
+      if(contention_was_found) break;
+    }
+    if(!contention_was_found) {
+      // become better friends, then spar
     }
   }
 
@@ -349,16 +398,16 @@ var Game = {
     right.current_opponent = left;
     
     // only display one match at a time
-    document.body.innerHTML = "";
-    
+    clear_story();
+
     // introduce the warriors
-    document.write("<p>In the red corner:</p> " + left.description);
-    document.write("<p>In the blue corner:</p> " + right.description);
+    write_to_story("<p>In the red corner:</p> " + left.description);
+    write_to_story("<p>In the blue corner:</p> " + right.description);
     
     // air their grievances, if any
     
-    if(left.grievance_count > 0) document.write(left.litany);
-    if(right.grievance_count > 0) document.write(right.litany);
+    if(left.grievance_count > 0) left.say(left.litany);
+    if(right.grievance_count > 0) right.say(right.litany);
     
     // if they don't *completely* hate each other, try to negotiate
     
@@ -373,7 +422,50 @@ var Game = {
     // relative strengths.
     // Either the stronger delivers a coup de grace,
     // or the weaker pulls out a hail-Mary.
+  },
+
+  battle: (first_warrior, other_warrior) => {
+    var my_power_level = 0,
+        their_power_level = 0;
+
+    for(var i = 0; i < total_warrior_count; i++) {
+      var my_relationship = first_warrior.alliance_by_id(i),
+          their_relationship = other_warrior.alliance_by_id(i);
+
+      if(my_relationship > their_relationship) my_power_level++;
+      if(my_relationship < their_relationship) their_power_level++;
+    }
+    if(DEBUG) console.log("my power level is " + my_power_level + " and theirs is " + their_power_level);
+
+    if(my_power_level > their_power_level) {
+      first_warrior.say(`<p>My power level is greater than yours! Surrender now or die!</p>`);
+    } else if(my_power_level < their_power_level) {
+      other_warrior.say(`<p>You are too weak to defeat me!</p>`);
+    } else {
+      first_warrior.say(`<p>This should be interesting.</p>`);
+      other_warrior.say(`<p>Enough talk. Have at you!</p>`);
+    }
+
+    // determine what kind of battle we are having
+    bigger_power_level = Math.max(my_power_level,their_power_level);
+    smaller_power_level = Math.min(my_power_level,their_power_level);
+
+    power_imbalance_ratio = bigger_power_level / smaller_power_level * 1.0;
+
+    if(power_imbalance_ratio > 2) {
+      // there is a complete blowout
+    }
+    else if(power_imbalance_ratio > 1.5) {
+      // the stronger is fairly dominant
+    }
+    else if(power_imbalance_ratio > 1.25) {
+      // it's a close match
+    }
+    else {
+      // it could go either way
+    }
   }
+
 };
 
 Game.play_next_round();
